@@ -47,7 +47,15 @@ export default function SignUpScreen() {
         return;
       }
 
-      await signUp.verifications.sendEmailCode();
+      const verifyResult = await signUp.verifications.sendEmailCode();
+      if (verifyResult?.error) {
+        const message =
+          (verifyResult.error as any)?.errors?.[0]?.longMessage ||
+          (verifyResult.error as any)?.errors?.[0]?.message ||
+          "Could not send verification code.";
+        Alert.alert("Error Sending Code", message);
+        return;
+      }
       setPendingVerification(true);
     } catch (err: any) {
       console.error("onSignUpPress exception:", err);
