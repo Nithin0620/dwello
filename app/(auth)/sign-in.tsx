@@ -25,6 +25,11 @@ export default function SignInScreen() {
       password,
     });
     if (error) {
+      const message =
+        (error as any)?.errors?.[0]?.longMessage ||
+        (error as any)?.errors?.[0]?.message ||
+        "Could not sign in. Please check your credentials.";
+      Alert.alert("Sign In Failed", message);
       return;
     }
 

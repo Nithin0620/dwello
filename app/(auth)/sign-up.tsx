@@ -31,10 +31,15 @@ export default function SignUpScreen() {
     });
     if (error) {
       console.error(JSON.stringify(error, null, 2));
+      const message =
+        (error as any)?.errors?.[0]?.longMessage ||
+        (error as any)?.errors?.[0]?.message ||
+        "Could not create account. Please check your details.";
+      Alert.alert("Sign Up Failed", message);
       return;
     }
 
-    if (!error) await signUp.verifications.sendEmailCode();
+    await signUp.verifications.sendEmailCode();
   };
 
   const onVerifyPress = async () => {
