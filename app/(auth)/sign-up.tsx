@@ -3,6 +3,7 @@ import { Link, useRouter } from "expo-router";
 import { useState } from "react";
 import {
   ActivityIndicator,
+  Alert,
   Image,
   ScrollView,
   Text,
@@ -21,45 +22,76 @@ export default function SignUpScreen() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [code, setCode] = useState("");
+  const [pendingVerification, setPendingVerification] = useState(false);
 
   const onSignUpPress = async () => {
-    const { error } = await signUp.password({
-      emailAddress: email,
-      password,
-      firstName,
-      lastName,
-    });
-    if (error) {
-      console.error(JSON.stringify(error, null, 2));
-      const message =
-        (error as any)?.errors?.[0]?.longMessage ||
-        (error as any)?.errors?.[0]?.message ||
-        "Could not create account. Please check your details.";
-      Alert.alert("Sign Up Failed", message);
+    if (!email.trim() || !password) {
+      Alert.alert("Missing Fields", "Please enter your email and password.");
       return;
     }
 
-    await signUp.verifications.sendEmailCode();
+    try {
+      const { error } = await signUp.password({
+        emailAddress: email.trim(),
+        password,
+        firstName: firstName.trim(),
+        lastName: lastName.trim(),
+      });
+      if (error) {
+        console.error("signUp.password error:", JSON.stringify(error, null, 2));
+        const message =
+          (error as any)?.errors?.[0]?.longMessage ||
+          (error as any)?.errors?.[0]?.message ||
+          "Could not create account. Please check your details.";
+        Alert.alert("Sign Up Failed", message);
+        return;
+      }
+
+      await signUp.verifications.sendEmailCode();
+      setPendingVerification(true);
+    } catch (err: any) {
+      console.error("onSignUpPress exception:", err);
+      Alert.alert("Sign Up Error", err?.message || "An unexpected error occurred.");
+    }
   };
 
   const onVerifyPress = async () => {
-    await signUp.verifications.verifyEmailCode({
-      code,
-    });
+    if (!code.trim()) {
+      Alert.alert("Missing Code", "Please enter the verification code sent to your email.");
+      return;
+    }
 
-    if (signUp.status === "complete") {
-      await signUp.finalize({
-        navigate: ({ session, decorateUrl }) => {
-          if (session?.currentTask) {
-            console.log(session?.currentTask);
-            return;
-          }
-          const url = decorateUrl("/");
-          router.replace(url as any);
-        },
+    try {
+      const verifyRes = await signUp.verifications.verifyEmailCode({
+        code: code.trim(),
       });
-    } else {
-      console.error("Sign-up attempt not complete:", signUp);
+
+      if (verifyRes?.error) {
+        const message =
+          (verifyRes.error as any)?.errors?.[0]?.longMessage ||
+          (verifyRes.error as any)?.errors?.[0]?.message ||
+          "Verification failed. Please check the code.";
+        Alert.alert("Verification Failed", message);
+        return;
+      }
+
+      if (signUp.status === "complete") {
+        await signUp.finalize({
+          navigate: ({ session, decorateUrl }) => {
+            if (session?.currentTask) {
+              console.log(session?.currentTask);
+              return;
+            }
+            const url = decorateUrl("/");
+            router.replace(url as any);
+          },
+        });
+      } else {
+        console.error("Sign-up attempt not complete:", signUp.status);
+      }
+    } catch (err: any) {
+      console.error("onVerifyPress exception:", err);
+      Alert.alert("Verification Error", err?.message || "Could not verify code.");
     }
   };
 
@@ -71,9 +103,9 @@ export default function SignUpScreen() {
 
   // OTP verification screen
   if (
-    signUp.status === "missing_requirements" &&
-    signUp.unverifiedFields.includes("email_address") &&
-    signUp.missingFields.length === 0
+    pendingVerification ||
+    (signUp.status === "missing_requirements" &&
+      signUp.unverifiedFields?.includes("email_address"))
   ) {
     return (
       <View className="flex-1 justify-center items-center bg-white px-6">
