@@ -1,4 +1,4 @@
-import { useAuth, useSignUp } from "@clerk/expo";
+import { useSignUp } from "@clerk/expo";
 import { Link, useRouter } from "expo-router";
 import { useState } from "react";
 import {
@@ -13,8 +13,7 @@ import {
 } from "react-native";
 
 export default function SignUpScreen() {
-  const { signUp, errors, fetchStatus } = useSignUp();
-  const { isSignedIn } = useAuth();
+  const { isLoaded, signUp, setActive } = useSignUp();
   const router = useRouter();
 
   const [firstName, setFirstName] = useState("");
@@ -23,98 +22,104 @@ export default function SignUpScreen() {
   const [password, setPassword] = useState("");
   const [code, setCode] = useState("");
   const [pendingVerification, setPendingVerification] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
 
   const onSignUpPress = async () => {
+    if (!isLoaded) return;
     if (!email.trim() || !password) {
       Alert.alert("Missing Fields", "Please enter your email and password.");
       return;
     }
 
+    setIsLoading(true);
     try {
-      const { error } = await signUp.password({
+      await signUp.create({
         emailAddress: email.trim(),
         password,
         firstName: firstName.trim(),
         lastName: lastName.trim(),
       });
-      if (error) {
-        console.error("signUp.password error:", JSON.stringify(error, null, 2));
-        const message =
-          (error as any)?.errors?.[0]?.longMessage ||
-          (error as any)?.errors?.[0]?.message ||
-          "Could not create account. Please check your details.";
-        Alert.alert("Sign Up Failed", message);
-        return;
-      }
 
-      const verifyResult = await signUp.verifications.sendEmailCode();
-      if (verifyResult?.error) {
-        const message =
-          (verifyResult.error as any)?.errors?.[0]?.longMessage ||
-          (verifyResult.error as any)?.errors?.[0]?.message ||
-          "Could not send verification code.";
-        Alert.alert("Error Sending Code", message);
-        return;
-      }
+      // Explicitly tell Clerk to prepare and send the OTP verification email
+      await signUp.prepareEmailAddressVerification({
+        strategy: "email_code",
+      });
+
       setPendingVerification(true);
     } catch (err: any) {
-      console.error("onSignUpPress exception:", err);
-      Alert.alert("Sign Up Error", err?.message || "An unexpected error occurred.");
+      console.error("onSignUpPress error:", JSON.stringify(err, null, 2));
+      const message =
+        err?.errors?.[0]?.longMessage ||
+        err?.errors?.[0]?.message ||
+        err?.message ||
+        "Could not create account. Please check your details.";
+      Alert.alert("Sign Up Failed", message);
+    } finally {
+      setIsLoading(false);
     }
   };
 
   const onVerifyPress = async () => {
+    if (!isLoaded) return;
     if (!code.trim()) {
-      Alert.alert("Missing Code", "Please enter the verification code sent to your email.");
+      Alert.alert(
+        "Missing Code",
+        "Please enter the verification code sent to your email."
+      );
       return;
     }
 
+    setIsLoading(true);
     try {
-      const verifyRes = await signUp.verifications.verifyEmailCode({
+      const completeSignUp = await signUp.attemptEmailAddressVerification({
         code: code.trim(),
       });
 
-      if (verifyRes?.error) {
-        const message =
-          (verifyRes.error as any)?.errors?.[0]?.longMessage ||
-          (verifyRes.error as any)?.errors?.[0]?.message ||
-          "Verification failed. Please check the code.";
-        Alert.alert("Verification Failed", message);
-        return;
-      }
-
-      if (signUp.status === "complete") {
-        await signUp.finalize({
-          navigate: ({ session, decorateUrl }) => {
-            if (session?.currentTask) {
-              console.log(session?.currentTask);
-              return;
-            }
-            const url = decorateUrl("/");
-            router.replace(url as any);
-          },
-        });
+      if (completeSignUp.status === "complete") {
+        await setActive({ session: completeSignUp.createdSessionId });
+        router.replace("/(root)/(tabs)");
       } else {
-        console.error("Sign-up attempt not complete:", signUp.status);
+        console.error(
+          "Sign up status not complete:",
+          JSON.stringify(completeSignUp, null, 2)
+        );
+        Alert.alert(
+          "Verification Incomplete",
+          "Please verify your details and try again."
+        );
       }
     } catch (err: any) {
-      console.error("onVerifyPress exception:", err);
-      Alert.alert("Verification Error", err?.message || "Could not verify code.");
+      console.error("onVerifyPress error:", JSON.stringify(err, null, 2));
+      const message =
+        err?.errors?.[0]?.longMessage ||
+        err?.errors?.[0]?.message ||
+        err?.message ||
+        "Verification failed. Please check the code.";
+      Alert.alert("Verification Failed", message);
+    } finally {
+      setIsLoading(false);
     }
   };
 
-  const isLoading = fetchStatus === "fetching";
-
-  if (signUp.status === "complete" || isSignedIn) {
-    return null;
-  }
+  const onResendPress = async () => {
+    if (!isLoaded) return;
+    try {
+      await signUp.prepareEmailAddressVerification({
+        strategy: "email_code",
+      });
+      Alert.alert(
+        "Code Sent",
+        "A fresh verification code has been dispatched to your email."
+      );
+    } catch (err: any) {
+      const message =
+        err?.errors?.[0]?.message || "Could not resend verification code.";
+      Alert.alert("Resend Failed", message);
+    }
+  };
 
   // OTP verification screen
-  if (
-    pendingVerification ||
-    (signUp.status === "missing_requirements" &&
-      signUp.unverifiedFields?.includes("email_address"))
-  ) {
+  if (pendingVerification) {
     return (
       <View className="flex-1 justify-center items-center bg-white px-6">
         <Image
@@ -126,22 +131,17 @@ export default function SignUpScreen() {
           Verify your account
         </Text>
         <Text className="text-gray-500 mb-8 text-center">
-          We sent a code to {email}
+          We sent a verification code to {email}
         </Text>
 
         <TextInput
           className="w-full border border-gray-300 rounded-xl px-4 py-3 mb-4"
-          placeholder="Enter verification code"
+          placeholder="Enter 6-digit code"
           placeholderTextColor="#9CA3AF"
           keyboardType="number-pad"
           value={code}
           onChangeText={setCode}
         />
-        {errors.fields.code && (
-          <Text className="text-red-500 mb-4">
-            {errors.fields.code.message}
-          </Text>
-        )}
 
         <TouchableOpacity
           onPress={onVerifyPress}
@@ -155,14 +155,14 @@ export default function SignUpScreen() {
           )}
         </TouchableOpacity>
 
-        <TouchableOpacity
-          onPress={() => signUp.verifications.sendEmailCode()}
-          className="py-2"
-        >
+        <TouchableOpacity onPress={onResendPress} className="py-2">
           <Text className="text-blue-600">I need a new code</Text>
         </TouchableOpacity>
 
-        <TouchableOpacity onPress={() => signUp.reset()} className="py-2">
+        <TouchableOpacity
+          onPress={() => setPendingVerification(false)}
+          className="py-2"
+        >
           <Text className="text-blue-600">Start over</Text>
         </TouchableOpacity>
       </View>
@@ -215,11 +215,6 @@ export default function SignUpScreen() {
           keyboardType="email-address"
           autoCapitalize="none"
         />
-        {errors.fields.emailAddress && (
-          <Text className="text-red-500 mb-4">
-            {errors.fields.emailAddress.message}
-          </Text>
-        )}
 
         <TextInput
           className="w-full border border-gray-300 rounded-xl px-4 py-3 mb-6"
@@ -229,11 +224,6 @@ export default function SignUpScreen() {
           onChangeText={setPassword}
           secureTextEntry
         />
-        {errors.fields.password && (
-          <Text className="text-red-500 mb-4">
-            {errors.fields.password.message}
-          </Text>
-        )}
 
         <TouchableOpacity
           onPress={onSignUpPress}
@@ -253,8 +243,6 @@ export default function SignUpScreen() {
             <Text className="text-blue-600 font-semibold">Sign In</Text>
           </Link>
         </View>
-
-        <View nativeID="clerk-captcha" />
       </View>
     </ScrollView>
   );

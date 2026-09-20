@@ -13,74 +13,75 @@ import {
 } from "react-native";
 
 export default function SignInScreen() {
-  const { signIn, errors, fetchStatus } = useSignIn();
+  const { isLoaded, signIn, setActive } = useSignIn();
   const router = useRouter();
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [code, setCode] = useState("");
+  const [pendingMfa, setPendingMfa] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
 
   const onSignInPress = async () => {
-    const { error } = await signIn.password({
-      emailAddress: email,
-      password,
-    });
-    if (error) {
-      const message =
-        (error as any)?.errors?.[0]?.longMessage ||
-        (error as any)?.errors?.[0]?.message ||
-        "Could not sign in. Please check your credentials.";
-      Alert.alert("Sign In Failed", message);
+    if (!isLoaded) return;
+    if (!email.trim() || !password) {
+      Alert.alert("Missing Fields", "Please enter your email and password.");
       return;
     }
 
-    if (signIn.status === "complete") {
-      await signIn.finalize({
-        navigate: ({ session, decorateUrl }) => {
-          if (session?.currentTask) {
-            console.log(session?.currentTask);
-            return;
-          }
-          const url = decorateUrl("/");
-          router.replace(url as any);
-        },
+    setIsLoading(true);
+    try {
+      const result = await signIn.create({
+        identifier: email.trim(),
+        password,
       });
-    } else if (signIn.status === "needs_second_factor") {
-      await signIn.mfa.sendPhoneCode();
-    } else if (signIn.status === "needs_client_trust") {
-      const emailCodeFactor = signIn.supportedSecondFactors.find(
-        (factor) => factor.strategy === "email_code"
-      );
-      if (emailCodeFactor) {
-        await signIn.mfa.sendEmailCode();
+
+      if (result.status === "complete") {
+        await setActive({ session: result.createdSessionId });
+        router.replace("/(root)/(tabs)");
+      } else if (result.status === "needs_second_factor") {
+        setPendingMfa(true);
+      } else {
+        console.log("Sign in status:", result.status);
       }
-    } else {
-      console.error("Sign-in attempt not complete:", signIn);
+    } catch (err: any) {
+      console.error("onSignInPress error:", JSON.stringify(err, null, 2));
+      const message =
+        err?.errors?.[0]?.longMessage ||
+        err?.errors?.[0]?.message ||
+        err?.message ||
+        "Could not sign in. Please check your credentials.";
+      Alert.alert("Sign In Failed", message);
+    } finally {
+      setIsLoading(false);
     }
   };
 
-  const onVerifyPress = async () => {
-    await signIn.mfa.verifyEmailCode({ code });
-
-    if (signIn.status === "complete") {
-      await signIn.finalize({
-        navigate: ({ session, decorateUrl }) => {
-          if (session?.currentTask) {
-            console.log(session?.currentTask);
-            return;
-          }
-          const url = decorateUrl("/");
-          router.replace(url as any);
-        },
+  const onVerifyMfaPress = async () => {
+    if (!isLoaded) return;
+    setIsLoading(true);
+    try {
+      const result = await signIn.attemptSecondFactor({
+        strategy: "email_code",
+        code: code.trim(),
       });
-    } else {
-      console.error("Sign-in attempt not complete:", signIn);
+
+      if (result.status === "complete") {
+        await setActive({ session: result.createdSessionId });
+        router.replace("/(root)/(tabs)");
+      }
+    } catch (err: any) {
+      const message =
+        err?.errors?.[0]?.longMessage ||
+        err?.errors?.[0]?.message ||
+        "Verification failed.";
+      Alert.alert("Verification Failed", message);
+    } finally {
+      setIsLoading(false);
     }
   };
 
-  const isLoading = fetchStatus === "fetching";
-
-  if (signIn.status === "needs_client_trust") {
+  if (pendingMfa) {
     return (
       <View className="flex-1 justify-center items-center bg-white px-6">
         <Image
@@ -89,25 +90,23 @@ export default function SignInScreen() {
           resizeMode="contain"
         />
         <Text className="text-2xl font-bold text-gray-800 mb-2">
-          Verify your account
+          Two-Factor Authentication
+        </Text>
+        <Text className="text-gray-500 mb-8 text-center">
+          Enter the verification code sent to {email}
         </Text>
 
         <TextInput
           className="w-full border border-gray-300 rounded-xl px-4 py-3 mb-4"
-          placeholder="Enter verification code"
+          placeholder="Enter 6-digit code"
           placeholderTextColor="#9CA3AF"
           keyboardType="number-pad"
           value={code}
           onChangeText={setCode}
         />
-        {errors.fields.code && (
-          <Text className="text-red-500 mb-4">
-            {errors.fields.code.message}
-          </Text>
-        )}
 
         <TouchableOpacity
-          onPress={onVerifyPress}
+          onPress={onVerifyMfaPress}
           disabled={isLoading}
           className="w-full bg-blue-600 py-4 rounded-xl items-center mb-4"
         >
@@ -118,15 +117,8 @@ export default function SignInScreen() {
           )}
         </TouchableOpacity>
 
-        <TouchableOpacity
-          onPress={() => signIn.mfa.sendEmailCode()}
-          className="py-2 mb-2"
-        >
-          <Text className="text-blue-600">I need a new code</Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity onPress={() => signIn.reset()} className="py-2">
-          <Text className="text-blue-600">Start over</Text>
+        <TouchableOpacity onPress={() => setPendingMfa(false)} className="py-2">
+          <Text className="text-blue-600">Back to Sign In</Text>
         </TouchableOpacity>
       </View>
     );
@@ -158,11 +150,6 @@ export default function SignInScreen() {
           keyboardType="email-address"
           autoCapitalize="none"
         />
-        {errors.fields.identifier && (
-          <Text className="text-red-500 mb-4">
-            {errors.fields.identifier.message}
-          </Text>
-        )}
 
         <TextInput
           className="w-full border border-gray-300 rounded-xl px-4 py-3 mb-6"
@@ -172,11 +159,6 @@ export default function SignInScreen() {
           onChangeText={setPassword}
           secureTextEntry
         />
-        {errors.fields.password && (
-          <Text className="text-red-500 mb-4">
-            {errors.fields.password.message}
-          </Text>
-        )}
 
         <TouchableOpacity
           onPress={onSignInPress}
